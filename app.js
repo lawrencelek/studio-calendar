@@ -564,6 +564,21 @@ async function boot() {
   } catch (e) { /* offline or blocked: fall back to the password screen */ }
   if (!exists) { $('login').hidden = true; $('setup').hidden = false; }
 }
+async function readSetupFile(file) {
+  let text = '';
+  try { text = await file.text(); } catch (e) { throw new Error(`Could not read ${file.name}. Download the setup file again and choose that copy.`); }
+  text = text.replace(/^\uFEFF/, '').trim();
+  let env = null;
+  try { env = JSON.parse(text); if (typeof env === 'string') env = JSON.parse(env); } catch (e) {
+    const m = text.match(/\{[\s\S]*"ct"[\s\S]*\}/);
+    if (m) { try { env = JSON.parse(m[0]); } catch (e2) { env = null; } }
+  }
+  if (env && env.ct && env.salt && env.iv) return env;
+  const size = `${file.name}, ${file.size.toLocaleString()} bytes`;
+  if (!text) throw new Error(`That file (${size}) is empty. Download the setup file again (it should be about 54,000 bytes).`);
+  if (/^<!doctype|^<html/i.test(text)) throw new Error(`That file (${size}) is a web page, not the setup file. Download the setup file again (about 54,000 bytes).`);
+  throw new Error(`That file (${size}) is not the setup file. It starts “${text.slice(0, 40).replace(/\s+/g, ' ')}”. The setup file is about 54,000 bytes and starts “{ "format": "encrypted-calendar"”.`);
+}
 async function setupCalendar() {
   const file = $('su-file').files[0];
   const code = $('su-code').value, p1 = $('su-pw1').value, p2 = $('su-pw2').value, token = $('su-token').value.trim();
@@ -571,8 +586,7 @@ async function setupCalendar() {
   if (p1.length < 12) throw new Error('Use at least 12 characters for your password.');
   if (p1 !== p2) throw new Error('The two new passwords differ.');
   if (p1 === code) throw new Error('Choose a password that is different from the setup code.');
-  let env; try { env = JSON.parse(await file.text()); } catch (e) { env = null; }
-  if (!env || !env.ct || !env.salt || !env.iv) throw new Error('That is not a setup file.');
+  const env = await readSetupFile(file);
   let data;
   try { data = await decryptEnv(env, await deriveKey(code, unb64(env.salt), env.iterations)); } catch (e) { throw new Error('The setup code does not open that file.'); }
   const c = ghCfg(); c.token = token;
