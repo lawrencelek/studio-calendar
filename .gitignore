@@ -1,0 +1,8 @@
+# Never commit plaintext calendar data
+calendar.json
+*.xlsx
+calendar-PLAINTEXT-*.json
+calendar-my-edits-*.json
+__pycache__/
+.DS_Store
+*setup*.json

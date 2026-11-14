@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.github.com; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>Calendar</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232E3440'/%3E%3Crect x='7' y='9' width='18' height='15' rx='2' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M7 14h18M12 6v5M20 6v5' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div id="login" class="login">
+  <form id="login-form" class="login-card" autocomplete="off">
+    <div class="login-mark">◷</div>
+    <h1>Calendar</h1>
+    <p class="muted">Enter the password.</p>
+    <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required autofocus>
+    <button id="unlock" class="btn primary" type="submit">Unlock</button>
+    <p id="login-error" class="error" role="alert"></p>
+    <p class="fine">The calendar is encrypted (AES-256). It is decrypted here in your browser; the password never leaves this device.</p>
+  </form>
+</div>
+
+<div id="setup" class="login" hidden>
+  <form id="setup-form" class="login-card" autocomplete="off">
+    <div class="login-mark">◷</div>
+    <h1>Set up</h1>
+    <p class="muted">No calendar is stored here yet. Open the setup file, choose your own password and save. Only a copy locked with your password is ever stored.</p>
+    <label class="field">Setup file<input id="su-file" type="file" accept=".json,application/json" required></label>
+    <label class="field">Setup code<input id="su-code" type="password" autocomplete="off" required></label>
+    <label class="field">Your new password (12+ characters)<input id="su-pw1" type="password" autocomplete="new-password" required></label>
+    <label class="field">Repeat your new password<input id="su-pw2" type="password" autocomplete="new-password" required></label>
+    <label class="field">GitHub token<input id="su-token" type="password" autocomplete="off" placeholder="github_pat_…" required></label>
+    <label class="field">Your name (optional)<input id="su-name" type="text" autocomplete="off"></label>
+    <button id="su-go" class="btn primary" type="submit">Create calendar</button>
+    <p id="setup-error" class="error" role="alert"></p>
+    <p class="fine">Use a long passphrase, for example five or six random words. Your password is never stored or sent anywhere; only the encrypted calendar is saved.</p>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <header class="top">
+    <div class="brand"><span id="brand-mark" class="mark">◷</span><span id="brand-title" class="title">Calendar</span></div>
+    <nav id="tabs" class="tabs" aria-label="Views"></nav>
+    <div class="actions">
+      <span id="status" class="status"></span>
+      <button id="save" class="btn primary" type="button">Save</button>
+      <button id="settings-btn" class="btn ghost" type="button" title="Settings">Settings</button>
+      <button id="lock" class="btn ghost" type="button" title="Lock">Lock</button>
+    </div>
+  </header>
+  <div id="banner" class="banner" hidden></div>
+  <main id="view" class="view"></main>
+</div>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true">
+    <div id="modal-body"></div>
+  </div>
+</div>
+<div id="toast" class="toast" hidden></div>
+</body>
+</html>
