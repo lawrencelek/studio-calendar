@@ -31,7 +31,9 @@ rm calendar.json
   - `dayNames[7]`, `defaultWeek[7]`
   - `dayCategories[]` (`{label, match: [keywords], color, exclusive?}`), which colour the week cells
   - `openingTripwire` (the tripwire `n` whose date drives the countdown), `countdownLabel`, `countdownShort`
-- `events[]`: `{id, date: "YYYY-MM-DD", until: "" | "YYYY-MM-DD", item, type ∈ settings.eventTypes, source}`. Month-only items go on the 1st. New ids are `ev-` followed by 8 hex characters.
+  - `lanes[]` (`{name, tone, note}`), which divide the calendar (Lanes tab, grouped Overview, lane filter in Events); `rhythmBaseLabel` (the heading for repeating blocks with no lane)
+- `events[]`: `{id, date: "YYYY-MM-DD", until: "" | "YYYY-MM-DD", item, type ∈ settings.eventTypes, lane: "" | settings.lanes name, source}`. Month-only items go on the 1st. New ids are `ev-` followed by 8 hex characters.
+- `rhythms[]`: repeating blocks `{id, time: "" | "HH:MM", label, days: [0–6, Mon = 0], nth: 0 (every week) | 1–5 (that occurrence in the month), lane: "" | settings.lanes name}`. New ids are `rh-` followed by 8 hex characters.
 - `weeks[]`: `{start: Monday "YYYY-MM-DD", days: [7 strings], notes}`.
 - `months[]`: keys and labels as listed in `monthColumns`.
 - `tripwires[]`: `{id, n, checkpoint, by: "YYYY-MM-DD" or words, byNote, ifMissed, status}`, where status ∈ Open, On track, At risk, Met, Missed.

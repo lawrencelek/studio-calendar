@@ -11,14 +11,14 @@ const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const FORMAT = 'encrypted-calendar';
 const GENERIC = { brand: '◷', title: 'Calendar' };
 const VIEWS = [
-  ['overview', 'Overview'], ['weeks', 'Weeks'], ['events', 'Events'], ['months', 'Months'],
+  ['overview', 'Overview'], ['lanes', 'Lanes'], ['weeks', 'Weeks'], ['events', 'Events'], ['months', 'Months'],
   ['tripwires', 'Tripwires'], ['premortem', 'Premortem'], ['priorities', 'Priorities'], ['backcast', 'Backcast'], ['focus', 'Focus flow'],
 ];
 
 const S = {
   data: null, pw: null, key: null, salt: null, iterations: CFG.iterations,
   sha: null, baseline: null, dirty: false, view: 'overview',
-  showPast: false, evType: 'All', evQuery: '', evPast: false,
+  showPast: false, evType: 'All', evQuery: '', evPast: false, evLane: 'All', laneDays: 90, lanePast: false,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +28,34 @@ function eventTypes() { const t = ST().eventTypes; return Array.isArray(t) && t.
 function toneOf(type) { const t = (ST().eventTypes || []).find((x) => x.name === type); return (t && t.tone) || 'slate'; }
 function dayHeaders() { const n = ST().dayNames; return Array.isArray(n) && n.length === 7 ? n : DAY_NAMES; }
 function defaultWeek() { const w = ST().defaultWeek; return Array.isArray(w) && w.length === 7 ? [...w] : Array(7).fill(''); }
+/* Lanes divide the calendar (settings.lanes: [{name, tone, note}]); events carry an optional `lane`.
+   Rhythms are repeating blocks (data.rhythms: [{id, time, label, days: [0-6, Mon = 0], nth: 0 = every week | 1-5 = that
+   occurrence in the month, lane}]); a rhythm with no lane belongs to the base band (settings.rhythmBaseLabel). */
+function lanes() { const l = ST().lanes; return Array.isArray(l) ? l.filter((x) => x && x.name) : []; }
+function laneNames() { return lanes().map((x) => x.name); }
+function laneTone(name) { const l = lanes().find((x) => x.name === name); return (l && l.tone) || 'light'; }
+const lanePill = (name) => (name ? pill(`tone-${laneTone(name)}`, name) : null);
+const baseLabel = () => ST().rhythmBaseLabel || 'Every day';
+function rhythms() { return Array.isArray(S.data.rhythms) ? S.data.rhythms : []; }
+function rhythmOn(r, d) {
+  const wd = (d.getDay() + 6) % 7; const nth = Number(r.nth) || 0;
+  return Array.isArray(r.days) && r.days.includes(wd) && (!nth || Math.ceil(d.getDate() / 7) === nth);
+}
+const ORD = ['', '1st', '2nd', '3rd', '4th', '5th'];
+function rhythmWhen(r) {
+  const days = [...(r.days || [])].sort((a, b) => a - b);
+  let d = days.length === 7 ? 'Daily' : days.join() === '0,1,2,3,4' ? 'Weekdays' : days.map((i) => DAY_NAMES[i]).join(' + ') || 'No days';
+  const nth = Number(r.nth) || 0;
+  if (nth) d = `${ORD[nth]} ${d} of the month`;
+  return r.time ? `${d} · ${r.time}` : d;
+}
+const byTime = (a, b) => (a.time || '99').localeCompare(b.time || '99');
+function groupByLane(evs) {
+  const names = laneNames();
+  const groups = names.map((n) => [n, evs.filter((e) => e.lane === n)]);
+  groups.push(['', evs.filter((e) => !names.includes(e.lane))]);
+  return groups.filter(([, l]) => l.length);
+}
 const gateType = () => ST().gateType || 'Gate';
 const countdownShort = () => ST().countdownShort || 'target';
 let catSrc = null, catCache = [];
@@ -342,8 +370,8 @@ function openSettings(msg) {
 }
 function eventsCsv() {
   const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  return ['Date,Until,Item,Type,Source', ...[...S.data.events].sort((a, b) => a.date.localeCompare(b.date))
-    .map((e) => [e.date, e.until || e.date, e.item, e.type, e.source].map(q).join(','))].join('\n');
+  return ['Date,Until,Item,Lane,Type,Source', ...[...S.data.events].sort((a, b) => a.date.localeCompare(b.date))
+    .map((e) => [e.date, e.until || e.date, e.item, e.lane || '', e.type, e.source].map(q).join(','))].join('\n');
 }
 
 /* ------------------------------------------------------------------ views */
@@ -351,7 +379,7 @@ function buildTabs() {
   $('tabs').replaceChildren(...VIEWS.map(([k, label]) => h('button', { class: `tab${S.view === k ? ' on' : ''}`, 'data-view': k, onclick: () => { S.view = k; buildTabs(); render(); window.scrollTo(0, 0); } }, label)));
 }
 function render() {
-  const v = $('view'); const fn = { overview, weeks, events, months, tripwires, premortem, priorities, backcast, focus }[S.view];
+  const v = $('view'); const fn = { overview, lanes: lanesView, weeks, events, months, tripwires, premortem, priorities, backcast, focus }[S.view];
   v.replaceChildren(...[fn()].flat(Infinity).filter((x) => x != null && x !== false));
   if (S.view === 'weeks') { const cur = v.querySelector('tr.current'); if (cur) cur.scrollIntoView({ block: 'center' }); }
 }
@@ -363,6 +391,8 @@ function overview() {
   const tw = S.data.tripwires;
   const risky = S.data.premortem.map((p) => [p, score(p)]).filter(([, s]) => s != null).sort((a, b) => b[1] - a[1]);
   const unscored = S.data.premortem.filter((p) => score(p) == null).length;
+  const todays = rhythms().filter((r) => rhythmOn(r, t)).sort(byTime);
+  const evList = (evs) => h('ul', { class: 'list' }, evs.map((e) => h('li', null, h('span', { class: 'when', text: fmtSpan(e) }), h('span', { class: 'pill-cell' }, typePill(e.type)), h('span', { text: e.item }))));
   return [
     ...viewHead(fmt(t, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), null),
     h('div', { class: 'cards' },
@@ -371,6 +401,9 @@ function overview() {
           h('div', { class: 'dname', text: `${DAY_NAMES[i]} ${addDays(wk, i).getDate()}` }), d || '—')))
           : h('p', { class: 'muted' }, 'This week is not in Weeks yet. Add it from the Weeks tab.'),
         week && week.notes ? h('p', { class: 'note', style: { marginTop: '10px' } }, week.notes) : null),
+      rhythms().length ? h('div', { class: 'card' }, h('h3', { text: 'Today' }),
+        todays.length ? h('ul', { class: 'list rhythm-list' }, todays.map((r) => h('li', null, h('span', { class: 'when', text: r.time || '—' }), h('span', null, r.label, ' ', lanePill(r.lane)))))
+          : h('p', { class: 'muted' }, 'No blocks today.')) : null,
       h('div', { class: 'card' }, h('h3', { text: 'Countdown' }),
         h('div', { class: 'kpis' },
           h('div', { class: 'kpi' }, h('div', { class: 'big', text: toOpen != null ? String(toOpen) : '—' }), h('div', { class: 'lbl', text: o ? `days to ${ST().countdownLabel || 'the target date'} (${fmtFull(o)})` : 'target date not set' })),
@@ -382,9 +415,10 @@ function overview() {
       h('div', { class: 'card' }, h('h3', { text: 'Premortem watch' }),
         risky.length ? h('ul', { class: 'list' }, risky.slice(0, 5).map(([p, s]) => h('li', { style: { gridTemplateColumns: '40px 1fr auto' } }, h('span', { class: 'pill', style: scoreStyle(s), text: String(s) }), h('span', { text: p.how }), statusPill(p.status)))) : null,
         unscored ? h('p', { class: 'note' }, `${unscored} of ${S.data.premortem.length} risks not scored yet. `, h('a', { href: '#', onclick: (ev) => { ev.preventDefault(); S.view = 'premortem'; buildTabs(); render(); } }, 'Score them')) : null),
-      h('div', { class: 'card wide' }, h('h3', { text: 'Next 30 days' }),
-        upcoming.length ? h('ul', { class: 'list' }, upcoming.map((e) => h('li', null, h('span', { class: 'when', text: fmtSpan(e) }), h('span', { class: 'pill-cell' }, typePill(e.type)), h('span', { text: e.item }))))
-          : h('p', { class: 'muted' }, 'Nothing dated in the next 30 days.')),
+      h('div', { class: rhythms().length ? 'card span2' : 'card wide' }, h('h3', { text: 'Next 30 days' }),
+        !upcoming.length ? h('p', { class: 'muted' }, 'Nothing dated in the next 30 days.')
+          : lanes().length ? groupByLane(upcoming).map(([n, l]) => [h('div', { class: 'lane-sub' }, n ? lanePill(n) : pill('tone-light', 'No lane')), evList(l)])
+            : evList(upcoming)),
     ),
   ];
 }
@@ -402,7 +436,7 @@ function weeks() {
     body.push(h('tr', { class: `${w.start === cur ? 'current' : ''}${start < mondayOf(t) ? ' past' : ''}` },
       h('td', { class: 'ro sticky-col w-s' }, h('b', { text: fmtDay(start) })),
       w.days.map((d, i) => h('td', { class: 'day' }, ed(w.days, i, { bg: true, ph: '—' }))),
-      h('td', { class: 'ro w-l' }, evs.map((e) => h('div', { style: { margin: '1px 0' } }, typePill(e.type), ' ', e.item))),
+      h('td', { class: 'ro w-l' }, evs.map((e) => h('div', { class: e.lane ? `lane-bar lb-${laneTone(e.lane)}` : 'lane-bar', title: e.lane || null }, typePill(e.type), ' ', e.item))),
       h('td', { class: 'ro w-xs' }, gate ? pill('gate', gateType()) : ''),
       h('td', { class: 'ro num w-xs', text: String(weeksTo(start)) }),
       h('td', { class: 'w-m' }, ed(w, 'notes', { ph: 'Notes' })),
@@ -410,7 +444,9 @@ function weeks() {
   }
   return [
     ...viewHead(meta.title || 'Weeks', `Day cells and notes are yours to change. “Fixed this week” and “${gateType()}” read from Events.`),
-    h('div', { class: 'legend' }, dayCats().map((c) => h('span', { style: { background: c.color }, text: c.label }))),
+    h('div', { class: 'legend' }, dayCats().map((c) => h('span', { style: { background: c.color }, text: c.label })),
+      lanes().map((l) => h('span', { class: `lane-key lb-${l.tone || 'light'}`, text: l.name }))),
+    rhythmBand(),
     h('div', { class: 'toolbar' },
       h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: S.showPast ? true : null, onchange: (e) => { S.showPast = e.target.checked; render(); } }), 'Show past weeks'),
       h('button', { class: 'btn small', onclick: () => { const cur = document.querySelector('tr.current'); if (cur) cur.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 'This week'),
@@ -432,17 +468,21 @@ function addWeek() {
 function events() {
   const t = today(), q = S.evQuery.toLowerCase();
   const meta = sheetMeta('events');
+  const names = laneNames(), hasLanes = names.length > 0;
+  const laneOk = (e) => S.evLane === 'All' || (S.evLane === '' ? !names.includes(e.lane) : e.lane === S.evLane);
   const list = [...S.data.events].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-    .filter((e) => (S.evType === 'All' || e.type === S.evType) && (S.evPast || !evEnd(e) || evEnd(e) >= t) && (!q || `${e.item} ${e.source}`.toLowerCase().includes(q)));
+    .filter((e) => (S.evType === 'All' || e.type === S.evType) && laneOk(e) && (S.evPast || !evEnd(e) || evEnd(e) >= t) && (!q || `${e.item} ${e.source} ${e.lane || ''}`.toLowerCase().includes(q)));
+  const span = hasLanes ? 7 : 6;
   let lastMonth = '';
   const body = [];
   for (const e of list) {
     const d = parseISO(e.date); const m = d ? fmtMonth(d) : 'No date';
-    if (m !== lastMonth) { lastMonth = m; body.push(h('tr', { class: 'month-row' }, h('td', { colspan: 6, text: m }))); }
+    if (m !== lastMonth) { lastMonth = m; body.push(h('tr', { class: 'month-row' }, h('td', { colspan: span, text: m }))); }
     body.push(h('tr', { class: evEnd(e) && evEnd(e) < t ? 'past' : '' },
       h('td', { class: 'w-s' }, dateInput(e, 'date', { label: 'Date' })),
       h('td', { class: 'w-s' }, dateInput(e, 'until', { label: 'Until' })),
       h('td', { class: 'w-xl' }, ed(e, 'item', { ph: 'What' })),
+      hasLanes ? h('td', { class: 'w-s' }, sel(e, 'lane', [['', '—'], ...names], { label: 'Lane' })) : null,
       h('td', { class: 'w-s' }, sel(e, 'type', eventTypes(), { label: 'Type' })),
       h('td', { class: 'w-m' }, ed(e, 'source', { ph: 'Source' })),
       h('td', { class: 'w-xs' }, delBtn(S.data.events, e, 'event'))));
@@ -452,18 +492,22 @@ function events() {
   return [
     ...viewHead(meta.title || 'Events', 'Every dated commitment. Add one here and it appears in Weeks. Month-only items sit on the 1st.'),
     h('div', { class: 'toolbar' },
-      h('button', { class: 'btn primary', onclick: addEvent }, '+ Add event'),
+      h('button', { class: 'btn primary', onclick: () => addEvent() }, '+ Add event'),
       ['All', ...eventTypes()].map((ty) => h('button', { class: `chip${S.evType === ty ? ' on' : ''}`, onclick: () => { S.evType = ty; render(); } }, ty)),
       search,
       h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: S.evPast ? true : null, onchange: (ev) => { S.evPast = ev.target.checked; render(); } }), 'Show past')),
+    hasLanes ? h('div', { class: 'toolbar' }, [['All', 'All lanes'], ...names.map((n) => [n, n]), ['', 'No lane']].map(([v, l]) =>
+      h('button', { class: `chip${S.evLane === v ? ' on' : ''}`, 'data-lane': v, onclick: () => { S.evLane = v; render(); } }, l))) : null,
     h('div', { class: 'table-wrap' }, h('table', { class: 'grid' },
-      h('thead', null, h('tr', null, ['Date', 'Until', 'Item', 'Type', 'Source', ''].map((x) => h('th', { text: x })))),
-      h('tbody', null, body.length ? body : h('tr', null, h('td', { class: 'ro muted', colspan: 6, text: 'No events match.' }))))),
+      h('thead', null, h('tr', null, ['Date', 'Until', 'Item', hasLanes ? 'Lane' : null, 'Type', 'Source', ''].filter((x) => x != null).map((x) => h('th', { text: x })))),
+      h('tbody', null, body.length ? body : h('tr', null, h('td', { class: 'ro muted', colspan: span, text: 'No events match.' }))))),
   ];
 }
-function addEvent() {
-  const e = { id: uid('ev'), date: toISO(today()), until: '', item: '', type: ST().defaultEventType || eventTypes()[0], source: ghCfg().editor || ST().defaultSource || '' };
-  S.data.events.push(e); S.evType = 'All'; S.evQuery = ''; changed(); render();
+function addEvent(lane) {
+  const e = { id: uid('ev'), date: toISO(today()), until: '', item: '', lane: lane || '', type: ST().defaultEventType || eventTypes()[0], source: ghCfg().editor || ST().defaultSource || '' };
+  S.data.events.push(e); S.evType = 'All'; S.evQuery = ''; S.evLane = 'All';
+  if (S.view !== 'events') { S.view = 'events'; buildTabs(); }
+  changed(); render();
   const row = [...document.querySelectorAll('.grid tbody tr')].find((tr) => tr.querySelector('.ed') && tr.querySelector('.ed').textContent === '' && tr.querySelector('input[type=date]').value === e.date);
   if (row) { row.scrollIntoView({ block: 'center' }); row.querySelector('.ed').focus(); }
 }
@@ -550,6 +594,69 @@ function focus() {
       h('ol', null, sec.steps.map((_, i) => h('li', null, h('div', { class: 'row' }, ed(sec.steps, i), h('button', { class: 'icon-btn', title: 'Delete step', onclick: () => { if (confirm('Delete this step?')) { sec.steps.splice(i, 1); changed(); render(); } } }, '×'))))),
       h('button', { class: 'btn small', style: { marginTop: '8px' }, onclick: () => { sec.steps.push(''); changed(); render(); } }, '+ Add step'))),
     h('button', { class: 'btn small', onclick: () => { S.data.focus.push({ id: uid('fs'), title: 'New section', steps: [''] }); changed(); render(); } }, '+ Add section')];
+}
+
+/* ------------------------------------------------------------------ lanes + rhythms */
+function rhythmBand() {
+  const rs = [...rhythms()].sort(byTime);
+  if (!rs.length) return null;
+  return h('div', { class: 'rhythm-band' }, h('b', { text: 'Repeating' }),
+    rs.map((r) => h('span', { class: r.lane ? `rb lb-${laneTone(r.lane)}` : 'rb', title: r.lane || baseLabel() }, h('span', { class: 'muted', text: rhythmWhen(r) }), ' ', r.label)));
+}
+function laneCol(l, evs, t) {
+  const rs = rhythms().filter((r) => r.lane === l.name).sort(byTime);
+  return h('div', { class: 'lane', 'data-lane': l.name },
+    h('div', { class: `lane-head tone-${l.tone || 'light'}` }, h('b', { text: l.name }), l.note ? h('div', { class: 'lane-note', text: l.note }) : null),
+    rs.length ? h('ul', { class: 'lane-rhythms' }, rs.map((r) => h('li', null, h('span', { class: 'when', text: rhythmWhen(r) }), r.label))) : null,
+    evs.length ? h('ul', { class: 'lane-list' }, evs.map((e) => h('li', { class: evEnd(e) && evEnd(e) < t ? 'past' : null },
+      h('div', { class: 'when', text: fmtSpan(e) }), h('div', null, typePill(e.type), ' ', e.item))))
+      : h('p', { class: 'muted lane-empty', text: 'Nothing dated in this window.' }),
+    h('button', { class: 'btn small', onclick: () => addEvent(l.name) }, '+ Add'));
+}
+function lanesView() {
+  const meta = sheetMeta('lanes'); const t = today(); const names = laneNames();
+  const horizon = S.laneDays ? addDays(t, S.laneDays) : null;
+  const evs = S.data.events.filter((e) => { const d = parseISO(e.date); return d && (S.lanePast || evEnd(e) >= t) && (!horizon || d <= horizon); })
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const base = rhythms().filter((r) => !names.includes(r.lane)).sort(byTime);
+  const rest = evs.filter((e) => !names.includes(e.lane));
+  return [
+    ...viewHead(meta.title || 'Lanes', meta.note),
+    h('div', { class: 'toolbar' },
+      [[30, 'Next 30 days'], [90, 'Next 90 days'], [0, 'Everything ahead']].map(([n, l]) => h('button', { class: `chip${S.laneDays === n ? ' on' : ''}`, onclick: () => { S.laneDays = n; render(); } }, l)),
+      h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: S.lanePast ? true : null, onchange: (e) => { S.lanePast = e.target.checked; render(); } }), 'Show past')),
+    base.length ? h('div', { class: 'base-band' }, h('b', { text: baseLabel() }),
+      base.map((r) => h('span', { class: 'rb' }, h('span', { class: 'muted', text: rhythmWhen(r) }), ' ', r.label))) : null,
+    names.length ? h('div', { class: 'lanes' }, lanes().map((l) => laneCol(l, evs.filter((e) => e.lane === l.name), t)))
+      : h('p', { class: 'muted' }, 'No lanes are set up yet. Ask Claude to add them to the calendar settings.'),
+    rest.length ? h('details', { class: 'lane-rest' }, h('summary', null, `Not in a lane (${rest.length})`),
+      h('ul', { class: 'list' }, rest.map((e) => h('li', null, h('span', { class: 'when', text: fmtSpan(e) }), h('span', { class: 'pill-cell' }, typePill(e.type)), h('span', { text: e.item }))))) : null,
+    rhythmsEditor(),
+  ];
+}
+function rhythmsEditor() {
+  const list = Array.isArray(S.data.rhythms) ? S.data.rhythms : []; const names = laneNames();
+  const dayToggles = (r) => h('div', { class: 'day-toggles' }, DAY_NAMES.map((d, i) => h('button', {
+    class: `chip tiny${(r.days || []).includes(i) ? ' on' : ''}`, 'aria-pressed': String((r.days || []).includes(i)), title: d,
+    onclick: (ev) => {
+      r.days = Array.isArray(r.days) ? r.days : [];
+      const k = r.days.indexOf(i); if (k >= 0) r.days.splice(k, 1); else { r.days.push(i); r.days.sort((a, b) => a - b); }
+      ev.currentTarget.classList.toggle('on', r.days.includes(i)); ev.currentTarget.setAttribute('aria-pressed', String(r.days.includes(i))); changed();
+    } }, d.slice(0, 2))));
+  return h('div', { class: 'rhythms-ed' },
+    h('h3', { text: 'Repeating blocks' }),
+    h('p', { class: 'note', text: `Times and days are yours to change. Blocks with no lane show as “${baseLabel()}”. A block set to “1st” shows only on the first of those weekdays in each month.` }),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'grid' },
+      h('thead', null, h('tr', null, ['Time', 'What', 'Days', 'Repeat', 'Lane', ''].map((x) => h('th', { text: x })))),
+      h('tbody', null, list.map((r) => h('tr', null,
+        h('td', { class: 'w-xs' }, ed(r, 'time', { ph: 'HH:MM' })),
+        h('td', { class: 'w-l' }, ed(r, 'label', { ph: 'What' })),
+        h('td', { class: 'w-m' }, dayToggles(r)),
+        h('td', { class: 'w-s' }, sel(r, 'nth', [[0, 'Every week'], ...[1, 2, 3, 4].map((n) => [n, `${ORD[n]} in month`])], { num: true, label: 'Repeat' })),
+        h('td', { class: 'w-s' }, sel(r, 'lane', [['', baseLabel()], ...names], { label: 'Lane' })),
+        h('td', { class: 'w-xs' }, delBtn(list, r, 'block'))))))),
+    h('div', { class: 'toolbar', style: { marginTop: '8px' } },
+      h('button', { class: 'btn small', onclick: () => { S.data.rhythms = list; list.push({ id: uid('rh'), time: '', label: '', days: [0, 1, 2, 3, 4, 5, 6], nth: 0, lane: '' }); changed(); render(); } }, '+ Add block')));
 }
 
 /* ------------------------------------------------------------------ first-run setup */

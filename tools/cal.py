@@ -102,6 +102,28 @@ def event_types(data):
     return [t["name"] for t in settings(data).get("eventTypes", [])] or ["Event"]
 
 
+TONES = ["red", "slate", "orange", "blue", "purple", "green", "yellow", "grey", "light"]
+
+
+def lane_names(data):
+    return [l["name"] for l in settings(data).get("lanes", []) if isinstance(l, dict) and l.get("name")]
+
+
+def rhythm_on(r, d: dt.date):
+    nth = int(r.get("nth") or 0)
+    return d.weekday() in (r.get("days") or []) and (not nth or (d.day - 1) // 7 + 1 == nth)
+
+
+def rhythm_when(r):
+    days = sorted(r.get("days") or [])
+    names = DEFAULT_DAYS
+    w = "Daily" if len(days) == 7 else "Weekdays" if days == [0, 1, 2, 3, 4] else " + ".join(names[i] for i in days) or "No days"
+    nth = int(r.get("nth") or 0)
+    if nth:
+        w = f"{['', '1st', '2nd', '3rd', '4th', '5th'][nth]} {w} of the month"
+    return f"{w} · {r['time']}" if r.get("time") else w
+
+
 def day_names(data):
     names = settings(data).get("dayNames")
     return names if isinstance(names, list) and len(names) == 7 else DEFAULT_DAYS
@@ -110,6 +132,26 @@ def day_names(data):
 # ---------------------------------------------------------------- check
 def check(data) -> list:
     errs, types = [], event_types(data)
+    lanes = lane_names(data)
+    if len(set(lanes)) != len(lanes):
+        errs.append("settings.lanes: lane names must be unique")
+    for l in settings(data).get("lanes", []):
+        if l.get("tone", "light") not in TONES:
+            errs.append(f"Lane {l.get('name')!r}: tone {l.get('tone')!r} not in {TONES}")
+    for e in data.get("events", []):
+        if e.get("lane") and e["lane"] not in lanes:
+            errs.append(f"Event {e.get('item')!r}: lane {e['lane']!r} not in settings.lanes {lanes}")
+    for r in data.get("rhythms", []):
+        days = r.get("days")
+        if not isinstance(days, list) or not days or any(not isinstance(i, int) or not 0 <= i <= 6 for i in days):
+            errs.append(f"Rhythm {r.get('label')!r}: days must be a non-empty list of 0–6 (Mon = 0)")
+        if r.get("nth") not in (None, 0, 1, 2, 3, 4, 5):
+            errs.append(f"Rhythm {r.get('label')!r}: nth must be 0 (every week) or 1–5")
+        if r.get("lane") and r["lane"] not in lanes:
+            errs.append(f"Rhythm {r.get('label')!r}: lane {r['lane']!r} not in settings.lanes {lanes}")
+        if r.get("time") and not re.fullmatch(r"\d{2}:\d{2}", r["time"]):
+            errs.append(f"Rhythm {r.get('label')!r}: time must be HH:MM or empty")
+        r.setdefault("id", new_id("rh"))
     for e in data.get("events", []):
         if not parse_date(e.get("date")):
             errs.append(f"Event {e.get('item')!r}: bad date {e.get('date')!r}")
@@ -165,9 +207,24 @@ def events_in_week(data, start: dt.date):
 def summary(data, days=21):
     today = dt.date.today(); horizon = today + dt.timedelta(days=days)
     print(f"{data.get('title', 'Calendar')} — next {days} days from {today:%a %d %b %Y}\n")
-    for e in sorted(data["events"], key=lambda e: e["date"]):
-        d = parse_date(e["date"]); u = parse_date(e.get("until")) or d
-        if u >= today and d <= horizon:
+    rs = sorted((r for r in data.get("rhythms", []) if rhythm_on(r, today)), key=lambda r: r.get("time") or "99")
+    if rs:
+        print("Today")
+        for r in rs:
+            print(f"  {r.get('time') or '—':<6} {r['label']}" + (f"  [{r['lane']}]" if r.get("lane") else ""))
+        print()
+    lanes = lane_names(data)
+    upcoming = [e for e in sorted(data["events"], key=lambda e: e["date"])
+                if (parse_date(e.get("until")) or parse_date(e["date"])) >= today and parse_date(e["date"]) <= horizon]
+    groups = [(n, [e for e in upcoming if e.get("lane") == n]) for n in lanes]
+    groups.append(("No lane" if lanes else "", [e for e in upcoming if e.get("lane") not in lanes]))
+    for name, evs in groups:
+        if not evs:
+            continue
+        if name:
+            print(name)
+        for e in evs:
+            d = parse_date(e["date"]); u = parse_date(e.get("until")) or d
             span = f"{d:%d %b}" + (f"–{u:%d %b}" if u != d else "")
             print(f"  {span:<15} {e['type']:<10} {e['item']}")
     if data.get("tripwires"):
@@ -208,9 +265,13 @@ def export_xlsx(data, out):
         return ws
 
     ev = sorted(data["events"], key=lambda e: e["date"])
-    sheet("Events", "events", ["Date", "Until", "Item", "Type", "Source"],
-          [[e["date"], e.get("until") or e["date"], e["item"], e["type"], e.get("source", "")] for e in ev],
-          [13, 13, 70, 12, 40], date_cols=(1, 2))
+    sheet("Events", "events", ["Date", "Until", "Item", "Lane", "Type", "Source"],
+          [[e["date"], e.get("until") or e["date"], e["item"], e.get("lane", ""), e["type"], e.get("source", "")] for e in ev],
+          [13, 13, 70, 14, 12, 40], date_cols=(1, 2))
+    if data.get("rhythms"):
+        sheet("Repeating", "rhythms", ["When", "Time", "What", "Lane"],
+              [[rhythm_when(r), r.get("time", ""), r["label"], r.get("lane") or st.get("rhythmBaseLabel", "")] for r in data["rhythms"]],
+              [34, 8, 60, 16])
     rows, gate_type = [], st.get("gateType", "Gate")
     for w in data["weeks"]:
         s = parse_date(w["start"]); evs = events_in_week(data, s)
